@@ -36,10 +36,6 @@ extern VALUE rb_cRuggedTag;
 extern VALUE rb_cRuggedTree;
 extern VALUE rb_cRuggedReference;
 
-extern VALUE rb_cRuggedCredPlaintext;
-extern VALUE rb_cRuggedCredSshKey;
-extern VALUE rb_cRuggedCredDefault;
-
 VALUE rb_cRuggedRepo;
 VALUE rb_cRuggedOdbObject;
 
@@ -289,165 +285,6 @@ static VALUE rb_git_repo_init_at(int argc, VALUE *argv, VALUE klass)
 	return rugged_repo_new(klass, repo);
 }
 
-static VALUE rugged__block_yield_splat(VALUE args) {
-	VALUE block = rb_ary_shift(args);
-	int n = RARRAY_LEN(args);
-	if (n == 0) {
-		return rb_funcall(block, rb_intern("call"), 0);
-	} else {
-		int i;
-		VALUE *argv;
-		argv = ALLOCA_N(VALUE, n);
-
-		for (i=0; i<n; i++) {
-			argv[i] = rb_ary_entry(args, i);
-		}
-
-		return rb_funcall2(block, rb_intern("call"), n, argv);
-	}
-}
-
-struct rugged_remote_cb_payload
-{
-	VALUE progress;
-	VALUE completion;
-	VALUE transfer_progress;
-	VALUE update_tips;
-	VALUE credentials;
-    int exception;
-};
-
-static int rugged__remote_transfer_progress_cb(const git_transfer_progress *stats, void *payload)
-{
-	struct rugged_remote_cb_payload *remote_payload = payload;
-	VALUE args = rb_ary_new2(4);
-	rb_ary_push(args, remote_payload->transfer_progress);
-	rb_ary_push(args, UINT2NUM(stats->total_objects));
-	rb_ary_push(args, UINT2NUM(stats->indexed_objects));
-	rb_ary_push(args, UINT2NUM(stats->received_objects));
-	rb_ary_push(args, INT2FIX(stats->received_bytes));
-	rb_protect(rugged__block_yield_splat, args, &remote_payload->exception);
-
-	return remote_payload->exception ? GIT_ERROR : GIT_OK;
-}
-
-struct extract_cred_payload
-{
-	VALUE rb_cred;
-	git_cred **cred;
-	unsigned int allowed_types;
-};
-
-static VALUE rugged__extract_cred(VALUE payload) {
-	struct extract_cred_payload *cred_payload = (struct extract_cred_payload*)payload;
-	git_cred **cred = cred_payload->cred;
-	VALUE rb_cred = cred_payload->rb_cred;
-
-	if (rb_obj_is_kind_of(rb_cred, rb_cRuggedCredPlaintext)) {
-		if (!(cred_payload->allowed_types & GIT_CREDTYPE_USERPASS_PLAINTEXT)) {
-			rb_raise(rb_eArgError, "Invalid credential type");
-		} else {
-			VALUE rb_username = rb_iv_get(rb_cred, "@username");
-			VALUE rb_password = rb_iv_get(rb_cred, "@password");
-
-			Check_Type(rb_username, T_STRING);
-			Check_Type(rb_password, T_STRING);
-
-
-			rugged_exception_check(
-				git_cred_userpass_plaintext_new(cred,
-					StringValueCStr(rb_username), StringValueCStr(rb_password)));
-		}
-	} else if (rb_obj_is_kind_of(rb_cred, rb_cRuggedCredSshKey)) {
-		if (!(cred_payload->allowed_types & GIT_CREDTYPE_SSH_KEY)) {
-			rb_raise(rb_eArgError, "Invalid credential type");
-		} else {
-			VALUE rb_username   = rb_iv_get(rb_cred, "@username");
-			VALUE rb_publickey  = rb_iv_get(rb_cred, "@publickey");
-			VALUE rb_privatekey = rb_iv_get(rb_cred, "@privatekey");
-			VALUE rb_passphrase = rb_iv_get(rb_cred, "@passphrase");
-
-			Check_Type(rb_privatekey, T_STRING);
-
-			if (!NIL_P(rb_username))
-				Check_Type(rb_username, T_STRING);
-			if (!NIL_P(rb_publickey))
-				Check_Type(rb_publickey, T_STRING);
-			if (!NIL_P(rb_passphrase))
-				Check_Type(rb_passphrase, T_STRING);
-
-			rugged_exception_check(
-				git_cred_ssh_key_new(cred,
-					NIL_P(rb_username) ? NULL : StringValueCStr(rb_username),
-					NIL_P(rb_publickey) ? NULL : StringValueCStr(rb_publickey),
-					StringValueCStr(rb_privatekey),
-					NIL_P(rb_passphrase) ? NULL : StringValueCStr(rb_passphrase)));
-		}
-	} else if (rb_obj_is_kind_of(rb_cred, rb_cRuggedCredDefault)) {
-		if (!(cred_payload->allowed_types & GIT_CREDTYPE_SSH_KEY)) {
-			rb_raise(rb_eArgError, "Invalid credential type");
-		} else {
-			rugged_exception_check(git_cred_default_new(cred));
-		}
-	}
-
-	return Qnil;
-}
-
-static int rugged__remote_credentials_cb(
-	git_cred **cred,
-	const char *url,
-	const char *username_from_url,
-	unsigned int allowed_types,
-	void *payload)
-{
-	struct rugged_remote_cb_payload *remote_payload = payload;
-	struct extract_cred_payload cred_payload;
-	VALUE args = rb_ary_new2(4), rb_allowed_types = rb_ary_new();
-
-	if (allowed_types & GIT_CREDTYPE_USERPASS_PLAINTEXT)
-		rb_ary_push(rb_allowed_types, CSTR2SYM("plaintext"));
-
-	if (allowed_types & GIT_CREDTYPE_SSH_KEY)
-		rb_ary_push(rb_allowed_types, CSTR2SYM("ssh_key"));
-
-	if (allowed_types & GIT_CREDTYPE_DEFAULT)
-		rb_ary_push(rb_allowed_types, CSTR2SYM("default"));
-
-	rb_ary_push(args, remote_payload->credentials);
-	rb_ary_push(args, url ? rb_str_new2(url) : Qnil);
-	rb_ary_push(args, username_from_url ? rb_str_new2(username_from_url) : Qnil);
-	rb_ary_push(args, rb_allowed_types);
-
-	cred_payload.cred = cred;
-	cred_payload.rb_cred = rb_protect(rugged__block_yield_splat, args, &remote_payload->exception);
-	cred_payload.allowed_types = allowed_types;
-
-	if (!remote_payload->exception)
-		rb_protect(rugged__extract_cred, (VALUE)&cred_payload, &remote_payload->exception);
-
-	return remote_payload->exception ? GIT_ERROR : GIT_OK;
-}
-
-static int rugged__default_remote_credentials_cb(
-	git_cred **cred,
-	const char *url,
-	const char *username_from_url,
-	unsigned int allowed_types,
-	void *payload)
-{
-	struct rugged_remote_cb_payload *remote_payload = payload;
-	struct extract_cred_payload cred_payload;
-
-	cred_payload.cred = cred;
-	cred_payload.rb_cred = remote_payload->credentials;
-	cred_payload.allowed_types = allowed_types;
-
-	rb_protect(rugged__extract_cred, (VALUE)&cred_payload, &remote_payload->exception);
-
-	return remote_payload->exception ? GIT_ERROR : GIT_OK;
-}
-
 static void parse_clone_options(git_clone_options *ret, VALUE rb_options_hash, struct rugged_remote_cb_payload *remote_payload)
 {
 	git_remote_callbacks remote_callbacks = GIT_REMOTE_CALLBACKS_INIT;
@@ -460,39 +297,8 @@ static void parse_clone_options(git_clone_options *ret, VALUE rb_options_hash, s
 	if (RTEST(val))
 		ret->bare = 1;
 
-	val = rb_hash_aref(rb_options_hash, CSTR2SYM("credentials"));
-	if (RTEST(val)) {
-		if (rb_obj_is_kind_of(val, rb_cRuggedCredPlaintext) ||
-			rb_obj_is_kind_of(val, rb_cRuggedCredSshKey) ||
-			rb_obj_is_kind_of(val, rb_cRuggedCredDefault))
-		{
-			remote_callbacks.credentials = rugged__default_remote_credentials_cb;
-			remote_payload->credentials = val;
-		} else if (rb_respond_to(val, rb_intern("call"))) {
-			remote_callbacks.credentials = rugged__remote_credentials_cb;
-			remote_payload->credentials = val;
-		} else {
-			rb_raise(rb_eArgError,
-				"Expected a Rugged::Credentials type, a Proc or an object that responds to call (:credentials).");
-		}
-	}
+	parse_fetch_options(&remote_callbacks, rb_options_hash, remote_payload);
 
-	val = rb_hash_aref(rb_options_hash, CSTR2SYM("callbacks"));
-	if (RTEST(val)) {
-		VALUE cb;
-
-		cb = rb_hash_aref(val, CSTR2SYM("transfer_progress"));
-		if (RTEST(cb)) {
-			if (!rb_respond_to(cb, rb_intern("call"))) {
-				rb_raise(rb_eArgError, "Expected a Proc or an object that responds to call (:transfer_progress).");
-			}
-
-			remote_payload->transfer_progress = cb;
-			remote_callbacks.transfer_progress = rugged__remote_transfer_progress_cb;
-		}
-	}
-
-	remote_callbacks.payload = remote_payload;
 	ret->remote_callbacks = remote_callbacks;
 }
 
@@ -523,22 +329,17 @@ static void parse_clone_options(git_clone_options *ret, VALUE rb_options_hash, s
  *    The proc will be called with the +url+, the +username+ from the url (if applicable) and
  *    a list of applicable credential types.
  *
- *  :callbacks ::
- *    A Hash containing name-value pairs that define different callbacks to run during
- *    the clone operation. Possible callbacks are:
+ *  :progress ::
+ *    A callback that will be executed with the textual progress received from the remote.
+ *    This is the text send over the progress side-band (ie. the "counting objects" output).
  *
- *    :progress ::
- *      Not yet implemented.
+ *  :transfer_progress ::
+ *    A callback that will be executed to report clone progress information. It will be passed
+ *    the amount of +total_objects+, +indexed_objects+, +received_objects+ and +received_bytes+.
  *
- *    :completion ::
- *      Not yet implemented.
- *
- *    :transfer_progress ::
- *      A callback that will be executed to report clone progress information. It will be passed
- *      the amount of +total_objects+, +indexed_objects+, +received_objects+ and +received_bytes+.
- *
- *    :update_tips ::
- *      Not yet implemented.
+ *  :update_tips ::
+ *    A callback that will be executed each time a reference is updated locally. It will be
+ *    passed the +refname+, +old_oid+ and +new_oid+.
  *
  *  Example:
  *

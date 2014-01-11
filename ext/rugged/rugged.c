@@ -357,6 +357,24 @@ void rugged_rb_ary_to_strarray(VALUE rb_array, git_strarray *str_array)
 	}
 }
 
+VALUE rugged__block_yield_splat(VALUE args) {
+	VALUE block = rb_ary_shift(args);
+	int n = RARRAY_LEN(args);
+	if (n == 0) {
+		return rb_funcall(block, rb_intern("call"), 0);
+	} else {
+		int i;
+		VALUE *argv;
+		argv = ALLOCA_N(VALUE, n);
+
+		for (i=0; i<n; i++) {
+			argv[i] = rb_ary_entry(args, i);
+		}
+
+		return rb_funcall2(block, rb_intern("call"), n, argv);
+	}
+}
+
 void Init_rugged(void)
 {
 	rb_mRugged = rb_define_module("Rugged");

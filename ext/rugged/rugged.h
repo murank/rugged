@@ -102,6 +102,19 @@ int rugged_oid_get(git_oid *oid, git_repository *repo, VALUE p);
 
 void rugged_rb_ary_to_strarray(VALUE rb_array, git_strarray *str_array);
 VALUE rugged_strarray_to_rb_ary(git_strarray *str_array);
+VALUE rugged__block_yield_splat(VALUE args);
+
+struct rugged_remote_cb_payload
+{
+	VALUE progress;
+	VALUE completion;
+	VALUE transfer_progress;
+	VALUE update_tips;
+	VALUE credentials;
+    int exception;
+};
+
+void parse_fetch_options(git_remote_callbacks *callbacks, VALUE rb_options_hash, struct rugged_remote_cb_payload *payload);
 
 static inline void rugged_set_owner(VALUE object, VALUE owner)
 {
