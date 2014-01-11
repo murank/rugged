@@ -174,9 +174,7 @@ static VALUE rugged_rhead_new(const git_remote_head *head)
  *  +Hash+.
  *  If no block is given an Enumerator is returned.
  *
- *    remote.connect(:fetch) do |r|
- *      r.ls.to_a #=> [{:local?=>false, :oid=>"b3ee97a91b02e91c35394950bda6ea622044baad", :loid=> nil, :name=>"refs/heads/development"}]
- *    end
+ *    remote.ls.to_a #=> [{:local?=>false, :oid=>"b3ee97a91b02e91c35394950bda6ea622044baad", :loid=> nil, :name=>"refs/heads/development"}]
  *
  *  remote head hash includes:
  *  [:oid] oid of the remote head
@@ -195,14 +193,20 @@ static VALUE rb_git_remote_ls(VALUE self)
 	if (!rb_block_given_p())
 		return rb_funcall(self, rb_intern("to_enum"), 1, CSTR2SYM("ls"));
 
+	error = git_remote_connect(remote, GIT_DIRECTION_FETCH);
+	rugged_exception_check(error);
+
 	error = git_remote_ls(&heads, &heads_len, remote);
 
 	for (i = 0; i < heads_len && !exception; i++) {
 		rb_protect(rb_yield, rugged_rhead_new(heads[i]), &exception);
-   	}
+	}
+
+	git_remote_disconnect(remote);
 
 	if (exception)
 		rb_jump_tag(exception);
+
 	rugged_exception_check(error);
 
 	return Qnil;
