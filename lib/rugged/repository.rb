@@ -194,5 +194,14 @@ module Rugged
       blob = Rugged::Blob.lookup(self, blob_data[:oid])
       (blob.type == :blob) ? blob : nil
     end
+
+    def fetch(remote_or_url, options_or_refspecs = nil, options = {})
+      if options_or_refspecs.kind_of?(Hash)
+        options, options_or_refspecs = options_or_refspecs, nil
+      end
+
+      remote_or_url = Remote.new(self, remote_or_url) unless remote_or_url.kind_of? Remote
+      remote_or_url.fetch(options_or_refspecs, options)
+    end
   end
 end
