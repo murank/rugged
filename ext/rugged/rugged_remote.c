@@ -797,7 +797,7 @@ void parse_fetch_options(git_remote_callbacks *callbacks, VALUE rb_options_hash,
  *
  *    remote = Rugged::Remote.lookup(@repo, 'origin')
  *    remote.fetch({
- *      :progress => lambda { |total_objects, indexed_objects, received_objects, received_bytes|
+ *      :transfer_progress => lambda { |total_objects, indexed_objects, received_objects, received_bytes|
  *        # ...
  *      }
  *    })
