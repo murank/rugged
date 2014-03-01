@@ -948,16 +948,7 @@ static VALUE rb_git_remote_push(int argc, VALUE *argv, VALUE self)
 	if (error) goto cleanup;
 
 	error = git_push_finish(push);
-
-	if (error) {
-		if (error == GIT_ENONFASTFORWARD) {
-			rb_exception = rb_exc_new2(rb_eRuggedError, "non-fast-forward update rejected");
-		} else if (error == -1) {
-			rb_exception = rb_exc_new2(rb_eRuggedError, "could not push to repo (check for non-bare repo)");
-		}
-
-		goto cleanup;
-	}
+	if (error) goto cleanup;
 
 	if (!git_push_unpack_ok(push)) {
 		rb_exception = rb_exc_new2(rb_eRuggedError, "the remote side did not unpack successfully");
