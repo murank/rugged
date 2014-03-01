@@ -797,6 +797,13 @@ void parse_fetch_options(git_remote_callbacks *callbacks, VALUE rb_options_hash,
  *    A callback that will be executed each time a reference is updated locally. It will be
  *    passed the +refname+, +old_oid+ and +new_oid+.
  *
+ *  :message ::
+ *    A single line log message to be appended to the reflog of each local remote-tracking
+ *    branch that gets updated. Defaults to: "update by push".
+ *
+ *  :signature ::
+ *    The signature to be used for populating the reflog entries.
+ *
  *  Example:
  *
  *    remote = Rugged::Remote.lookup(@repo, 'origin')
@@ -808,12 +815,16 @@ void parse_fetch_options(git_remote_callbacks *callbacks, VALUE rb_options_hash,
  */
 static VALUE rb_git_remote_fetch(int argc, VALUE *argv, VALUE self)
 {
-	VALUE rb_options, rb_refspecs;
+	VALUE rb_options, rb_refspecs, rb_val, rb_repo = rugged_owner(self);
+
+	git_repository *repo;
 	git_remote *remote, *tmp_remote;
 	git_remote_callbacks callbacks = GIT_REMOTE_CALLBACKS_INIT;
 	git_strarray refspecs;
+	git_signature *signature = NULL;
 
 	int error, has_custom_refspecs = 0;
+	char *log_message = NULL;
 
 	struct rugged_remote_cb_payload payload = { Qnil, Qnil, Qnil, Qnil, 0 };
 
@@ -824,7 +835,19 @@ static VALUE rb_git_remote_fetch(int argc, VALUE *argv, VALUE self)
 
 	parse_fetch_options(&callbacks, rb_options, &payload);
 
+	rugged_check_repo(rb_repo);
+	Data_Get_Struct(rb_repo, git_repository, repo);
 	Data_Get_Struct(self, git_remote, remote);
+
+	if (!NIL_P(rb_options)) {
+		rb_val = rb_hash_aref(rb_options, CSTR2SYM("message"));
+		if (!NIL_P(rb_val))
+			log_message = StringValueCStr(rb_val);
+
+		rb_val = rb_hash_aref(rb_options, CSTR2SYM("signature"));
+		if (!NIL_P(rb_val))
+			signature = rugged_signature_get(rb_val, repo);
+	}
 
 	// Create a temporary remote that we use for fetching
 	error = git_remote_dup(&tmp_remote, remote);
@@ -838,9 +861,10 @@ static VALUE rb_git_remote_fetch(int argc, VALUE *argv, VALUE self)
 		if (error) goto cleanup;
 	}
 
-	error = git_remote_fetch(tmp_remote, NULL, NULL);
+	error = git_remote_fetch(tmp_remote, signature, log_message);
 
 cleanup:
+	git_signature_free(signature);
 	git_remote_free(tmp_remote);
 	xfree(refspecs.strings);
 
@@ -903,6 +927,13 @@ static int rugged__push_status_cb(const char *ref, const char *msg, void *payloa
  *    The proc will be called with the +url+, the +username+ from the url (if applicable) and
  *    a list of applicable credential types.
  *
+ *  :message ::
+ *    A single line log message to be appended to the reflog of each local remote-tracking
+ *    branch that gets updated. Defaults to: "fetch".
+ *
+ *  :signature ::
+ *    The signature to be used for populating the reflog entries.
+ *
  *  Example:
  *
  *    remote = Rugged::Remote.lookup(@repo, 'origin')
@@ -910,13 +941,18 @@ static int rugged__push_status_cb(const char *ref, const char *msg, void *payloa
  */
 static VALUE rb_git_remote_push(int argc, VALUE *argv, VALUE self)
 {
-	VALUE rb_refspecs, rb_options, rb_exception = Qnil, rb_result = rb_hash_new();
+	VALUE rb_refspecs, rb_options, rb_val;
+	VALUE rb_repo = rugged_owner(self);
+	VALUE rb_exception = Qnil, rb_result = rb_hash_new();
 
+	git_repository *repo;
 	git_remote *remote, *tmp_remote;
 	git_remote_callbacks callbacks = GIT_REMOTE_CALLBACKS_INIT;
 	git_push *push = NULL;
+	git_signature *signature = NULL;
 
 	int error = 0, i = 0;
+	char *log_message = NULL;
 
 	struct rugged_remote_cb_payload payload = { Qnil, Qnil, Qnil, Qnil, 0 };
 
@@ -928,6 +964,8 @@ static VALUE rb_git_remote_push(int argc, VALUE *argv, VALUE self)
 		Check_Type(rb_refspec, T_STRING);
 	}
 
+	rugged_check_repo(rb_repo);
+	Data_Get_Struct(rb_repo, git_repository, repo);
 	Data_Get_Struct(self, git_remote, remote);
 
 	// Create a temporary remote that we use for pushing
@@ -937,6 +975,16 @@ static VALUE rb_git_remote_push(int argc, VALUE *argv, VALUE self)
 	parse_push_options(&callbacks, rb_options, &payload);
 	error = git_remote_set_callbacks(tmp_remote, &callbacks);
 	if (error) goto cleanup;
+
+	if (!NIL_P(rb_options)) {
+		rb_val = rb_hash_aref(rb_options, CSTR2SYM("message"));
+		if (!NIL_P(rb_val))
+			log_message = StringValueCStr(rb_val);
+
+		rb_val = rb_hash_aref(rb_options, CSTR2SYM("signature"));
+		if (!NIL_P(rb_val))
+			signature = rugged_signature_get(rb_val, repo);
+	}
 
 	error = git_push_new(&push, tmp_remote);
 	if (error) goto cleanup;
@@ -958,11 +1006,12 @@ static VALUE rb_git_remote_push(int argc, VALUE *argv, VALUE self)
 	error = git_push_status_foreach(push, &rugged__push_status_cb, (void *)rb_result);
 	if (error) goto cleanup;
 
-	error = git_push_update_tips(push, NULL, NULL);
+	error = git_push_update_tips(push, signature, log_message);
 
 cleanup:
 	git_push_free(push);
 	git_remote_free(tmp_remote);
+	git_signature_free(signature);
 
 	if (!NIL_P(rb_exception))
 		rb_exc_raise(rb_exception);
